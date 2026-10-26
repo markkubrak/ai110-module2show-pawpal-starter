@@ -64,10 +64,15 @@ A second, smaller tradeoff: conflicts are **warnings, not errors**. If two tasks
 - How did you use AI tools during this project (for example: design brainstorming, debugging, refactoring)?
 - What kinds of prompts or questions were most helpful?
 
+I used it for brainstorming, debugging, refactoring, testing, confirming. Used it for many things.
+Asking it to double check on things or adding some additional instructions does a lot.
+
 **b. Judgment and verification**
 
 - Describe one moment where you did not accept an AI suggestion as-is.
 - How did you evaluate or verify what the AI suggested?
+
+It told me it set up the scheduler so that if the task runs past midnight then to just cancel the entire task. I had it set up a system after I confirmed that worked better.
 
 ---
 
@@ -78,10 +83,13 @@ A second, smaller tradeoff: conflicts are **warnings, not errors**. If two tasks
 - What behaviors did you test?
 - Why were these tests important?
 
+I tested against every major edge case I could think of with the help of AI things with time, etc. They were important because people can try to break things
+
 **b. Confidence**
 
 - How confident are you that your scheduler works correctly?
 - What edge cases would you test next if you had more time?
+I would verify input more and if certain data works properly.
 
 ---
 
@@ -91,10 +99,16 @@ A second, smaller tradeoff: conflicts are **warnings, not errors**. If two tasks
 
 - What part of this project are you most satisfied with?
 
+the collaboration and ideas I had with the AI
+
 **b. What you would improve**
 
 - If you had another iteration, what would you improve or redesign?
 
+Adding more features
+
 **c. Key takeaway**
 
 - What is one important thing you learned about designing systems or working with AI on this project?
+
+That you could easily let AI do things and not even realize. Being specific like how the logic we added had to have certain rules made it go to work instead of just saying make it perfect

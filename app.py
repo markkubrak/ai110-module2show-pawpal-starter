@@ -8,37 +8,10 @@ st.set_page_config(page_title="PawPal+", page_icon="🐾", layout="centered")
 
 st.title("🐾 PawPal+")
 
-st.markdown(
-    """
-Welcome to the PawPal+ starter app.
-
-This file is intentionally thin. It gives you a working Streamlit app so you can start quickly,
-but **it does not implement the project logic**. Your job is to design the system and build it.
-
-Use this app as your interactive demo once your backend classes/functions exist.
-"""
+st.caption(
+    "Plan your pets' care for the day: add pets and tasks, then let PawPal+ build a schedule "
+    "that fits your time, puts important care first, and explains its choices."
 )
-
-with st.expander("Scenario", expanded=True):
-    st.markdown(
-        """
-**PawPal+** is a pet care planning assistant. It helps a pet owner plan care tasks
-for their pet(s) based on constraints like time, priority, and preferences.
-
-You will design and implement the scheduling logic and connect it to this Streamlit UI.
-"""
-    )
-
-with st.expander("What you need to build", expanded=True):
-    st.markdown(
-        """
-At minimum, your system should:
-- Represent pet care tasks (what needs to happen, how long it takes, priority)
-- Represent the pet and the owner (basic info and preferences)
-- Build a plan/schedule for a day that chooses and orders tasks based on constraints
-- Explain the plan (why each task was chosen and when it happens)
-"""
-    )
 
 st.divider()
 
@@ -133,8 +106,16 @@ todays = scheduler.sort_by_time(scheduler.filter_tasks(
     pet_name=None if pet_filter == "All pets" else pet_filter,
     status=None if status_filter == "all" else status_filter,
 ))
-for warning in scheduler.detect_conflicts():
-    st.warning(f"Time conflict: {warning}")
+overlaps = scheduler.detect_conflicts()
+if overlaps:
+    st.warning(
+        f"**{len(overlaps)} time conflict(s) today.** You can't do these at the same time:\n\n"
+        + "\n".join(f"- {w}" for w in overlaps)
+        + "\n\nThe schedule will start the later task when the earlier one ends. "
+        "To avoid that, change a preferred time or mark a task done."
+    )
+elif any(t.preferred_time for _, t in scheduler.get_todays_tasks()):
+    st.success("No time conflicts today.")
 if todays:
     for pet, task in todays:
         col1, col2 = st.columns([4, 1])
@@ -161,17 +142,43 @@ st.subheader("Build Schedule")
 if st.button("Generate schedule", type="primary"):
     plan = scheduler.generate_plan()
     if plan.items:
+        st.success(
+            f"Scheduled {len(plan.items)} task(s) for {plan.date:%A, %b %d}, using "
+            f"{plan.total_minutes} of {plan.available_minutes} available minutes."
+        )
         st.table([
             {
-                "Time": f"{i.start_time:%H:%M}-{i.end_time:%H:%M}",
+                "Time": i.time_range,
                 "Task": i.task.description,
                 "Pet": i.pet.name,
                 "Minutes": i.task.duration_minutes,
                 "Priority": i.task.priority.name.lower(),
+                "Why": i.reason,
             }
             for i in plan.items
         ])
+    elif not plan.skipped:
+        st.info("No tasks are due today.")
     else:
-        st.warning("Nothing could be scheduled.")
-    st.markdown("**Why this plan**")
-    st.text(plan.explain())
+        st.error("Nothing fit in your available time.")
+
+    # Overlaps were already shown above; here only say what the scheduler changed.
+    adjustments = [c for c in plan.conflicts if c not in overlaps]
+    if adjustments:
+        st.info("**Adjusted to avoid overlaps:**\n\n" + "\n".join(f"- {c}" for c in adjustments))
+    if plan.skipped:
+        st.warning(
+            f"**{len(plan.skipped)} task(s) skipped** because they didn't fit in your "
+            f"{plan.available_minutes} minutes. Lower-priority tasks are dropped first."
+        )
+        st.table([
+            {
+                "Task": t.description,
+                "Pet": p.name,
+                "Minutes": t.duration_minutes,
+                "Priority": t.priority.name.lower(),
+            }
+            for p, t in plan.skipped
+        ])
+    with st.expander("Full explanation"):
+        st.text(plan.explain())

@@ -90,7 +90,7 @@ def main() -> None:
     show(scheduler.sort_by_time(owner.get_all_tasks()))
 
     section("Filter: Mochi's tasks only")
-    show(scheduler.filter_tasks(pet_name="Mochi"))
+    show(scheduler.sort_by_time(scheduler.filter_tasks(pet_name="Mochi")))
 
     section("Recurring tasks: complete breakfast and brushing")
     next_breakfast = scheduler.complete_task(biscuit.tasks[1].id, on=today)

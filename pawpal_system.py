@@ -45,6 +45,9 @@ class Status(StrEnum):
 # Days between occurrences for each recurring frequency.
 _INTERVAL_DAYS = {Frequency.DAILY: 1, Frequency.WEEKLY: 7}
 
+# Minutes in a day; a plan never runs past midnight.
+_DAY_MINUTES = 24 * 60
+
 
 @dataclass(slots=True, kw_only=True)
 class Task:
@@ -181,6 +184,17 @@ class ScheduledItem:
         """When this item finishes."""
         return _add_minutes(self.start_time, self.task.duration_minutes)
 
+    @property
+    def ends_next_day(self) -> bool:
+        """True if this item runs past midnight."""
+        return _to_minutes(self.start_time) + self.task.duration_minutes > _DAY_MINUTES
+
+    @property
+    def time_range(self) -> str:
+        """Start-end as HH:MM-HH:MM, marking an end time on the next day."""
+        suffix = " (+1 day)" if self.ends_next_day else ""
+        return f"{self.start_time:%H:%M}-{self.end_time:%H:%M}{suffix}"
+
 
 @dataclass(slots=True)
 class DailyPlan:
@@ -229,7 +243,7 @@ class DailyPlan:
             return f"Plan for {self.date:%A, %b %d}: nothing scheduled."
         lines = [f"Plan for {self.date:%A, %b %d}:"]
         lines += [
-            f"{i.start_time:%H:%M}-{i.end_time:%H:%M}  {i.task.description} for {i.pet.name} "
+            f"{i.time_range}  {i.task.description} for {i.pet.name} "
             f"({i.task.duration_minutes} min) [{i.task.priority.name.lower()}]"
             for i in self.items
         ]
@@ -379,18 +393,23 @@ class Scheduler:
         """Give each chosen task a start time, in clock order.
 
         Timed tasks go at their preferred time (or as soon after as possible),
-        then flexible tasks fill the earliest gap they fit in. Pushed timed
-        tasks are noted in plan.conflicts.
+        even if that is before day_start; flexible tasks then fill the earliest
+        gap from day_start on. Pushed timed tasks are noted in plan.conflicts.
+        Timed tasks may end after midnight but must start before it; flexible
+        tasks must finish by midnight. Anything else is moved to plan.skipped.
         """
         timed = [(pet, task) for pet, task in chosen if task.preferred_time]
         flexible = [(pet, task) for pet, task in chosen if not task.preferred_time]
         day_start = _to_minutes(self.owner.day_start)
         busy: list[tuple[int, int]] = []
         placed: list[tuple[int, Pet, Task, str]] = []
-        cursor = day_start
+        cursor = 0
         for pet, task in self.sort_by_time(timed):
             wanted = _to_minutes(task.preferred_time)
             start = max(wanted, cursor)
+            if start >= _DAY_MINUTES:
+                self._drop_past_midnight(plan, pet, task, "would be pushed past midnight")
+                continue
             reason = self._reason(task)
             if start > wanted:
                 reason += f", moved to {_fmt(start)} because the earlier slot was taken"
@@ -403,6 +422,9 @@ class Scheduler:
 
         for pet, task in sorted(flexible, key=self._sort_key):
             start = _earliest_gap(busy, day_start, task.duration_minutes)
+            if start + task.duration_minutes > _DAY_MINUTES:
+                self._drop_past_midnight(plan, pet, task, "doesn't fit before midnight")
+                continue
             bisect.insort(busy, (start, start + task.duration_minutes))
             placed.append((start, pet, task, self._reason(task)))
 
@@ -411,6 +433,12 @@ class Scheduler:
             ScheduledItem(pet=pet, task=task, start_time=_from_minutes(start), reason=reason)
             for start, pet, task, reason in placed
         ]
+
+    @staticmethod
+    def _drop_past_midnight(plan: DailyPlan, pet: Pet, task: Task, why: str) -> None:
+        """Skip a task that can't be placed today and say why in plan.conflicts."""
+        plan.skipped.append((pet, task))
+        plan.conflicts.append(f"{task.description} for {pet.name} {why}, so it was skipped.")
 
     def _sort_key(self, pair: tuple[Pet, Task]) -> tuple:
         """Sort key: highest priority first, then earliest preferred time, then shortest."""
