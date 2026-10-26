@@ -1,15 +1,40 @@
 classDiagram
-    %% PawPal+ initial design draft.
+    %% PawPal+ design draft (matches pawpal_system.py skeleton).
+
+    class Priority {
+        <<enumeration>>
+        LOW = 1
+        MEDIUM = 2
+        HIGH = 3
+    }
+
+    class Category {
+        <<enumeration>>
+        WALK
+        FEEDING
+        MEDS
+        ENRICHMENT
+        GROOMING
+        OTHER
+    }
+
+    class Frequency {
+        <<enumeration>>
+        ONCE
+        DAILY
+        WEEKLY
+    }
 
     class Owner {
         +str name
         +int available_minutes
+        +time day_start
         +list~str~ preferences
         +list~Pet~ pets
         +add_pet(pet: Pet) None
         +remove_pet(name: str) None
-        +get_pet(name: str) Pet
-        +get_all_tasks() list~Task~
+        +get_pet(name: str) Optional~Pet~
+        +get_all_tasks() list~tuple~Pet, Task~~
     }
 
     class Pet {
@@ -19,50 +44,64 @@ classDiagram
         +int age
         +list~Task~ tasks
         +add_task(task: Task) None
-        +remove_task(title: str) None
+        +remove_task(task_id: str) None
         +get_tasks() list~Task~
     }
 
     class Task {
-        +str title
-        +str category
+        +str description
+        +Category category
         +int duration_minutes
-        +str priority
-        +str preferred_time
+        +Priority priority
+        +Optional~time~ preferred_time
+        +Frequency frequency
         +bool completed
-        +mark_complete() None
-        +priority_value() int
+        +Optional~date~ last_completed
+        +str id
+        +__post_init__() None
+        +mark_complete(on: Optional~date~) None
+        +is_due(day: date) bool
     }
 
     class Scheduler {
         +Owner owner
-        +schedule_walk(pet: Pet, duration_minutes: int, preferred_time: str, priority: str) Task
-        +get_todays_tasks() list~Task~
-        +generate_plan() DailyPlan
-        -sort_by_priority(tasks: list~Task~) list~Task~
+        +schedule_walk(pet: Pet, duration_minutes: int, preferred_time: Optional~time~, priority: Priority) Task
+        +get_todays_tasks(day: Optional~date~) list~tuple~Pet, Task~~
+        +complete_task(task_id: str, on: Optional~date~) Task
+        +generate_plan(day: Optional~date~) DailyPlan
+        -_sort_key(pair: tuple~Pet, Task~) tuple
+        -_reason(task: Task) str
     }
 
     class DailyPlan {
         +date date
+        +int available_minutes
         +list~ScheduledItem~ items
-        +list~Task~ skipped
-        +int total_minutes
+        +list~tuple~Pet, Task~~ skipped
+        +int total_minutes (property)
         +add_item(item: ScheduledItem) None
         +explain() str
         +display() str
     }
 
     class ScheduledItem {
-        +Task task
+        <<frozen>>
         +Pet pet
-        +str start_time
+        +Task task
+        +time start_time
         +str reason
+        +time end_time (property)
     }
 
     Owner "1" o-- "*" Pet : owns
     Pet "1" *-- "*" Task : has
+    Task --> Priority
+    Task --> Category
+    Task --> Frequency
     Scheduler --> Owner : plans for
     Scheduler ..> DailyPlan : creates
+    Scheduler ..> Task : creates walk
     DailyPlan "1" *-- "*" ScheduledItem : contains
+    DailyPlan --> Task : skipped
     ScheduledItem --> Task : wraps
     ScheduledItem --> Pet : for

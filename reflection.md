@@ -15,8 +15,14 @@ My first UML design is built around three things a user has to be able to do: ad
 
 **b. Design changes**
 
-- Did your design change during implementation?
-- If yes, describe at least one change and why you made it.
+Yes. When I turned the UML into Python class stubs and reviewed them, I found a few problems and changed the design:
+
+- **Tasks didn't know which pet they belonged to.** In my first design `Owner.get_all_tasks()` returned only `Task` objects, so the scheduler couldn't tell which pet each task was for and couldn't fill in `ScheduledItem.pet`. Now `get_all_tasks()`, `get_todays_tasks()` and `DailyPlan.skipped` use `(pet, task)` pairs, so that link is kept all the way through scheduling.
+- **Priority and category became enums instead of strings.** With plain strings like `"high"`, a typo would quietly break sorting. `Priority` is an `IntEnum` (LOW=1, MEDIUM=2, HIGH=3), so priorities sort directly, and I removed the old `priority_value()` method. `Category` lists the allowed kinds of care: walk, feeding, meds, enrichment, grooming and other.
+- **Each task got a unique `id`.** Removing a task by its title fails when two tasks share a name, like two "Walk" tasks, so `remove_task` now takes a `task_id`.
+- **Times use `datetime.time` instead of strings.** `preferred_time` and `start_time` are now real times, so they can be compared and added to without parsing text. I also gave `Owner` a `day_start` time so the scheduler knows when the day begins.
+- **`total_minutes` is calculated instead of stored.** It used to be a stored number that could fall out of sync with the plan's items, so I made it a property that adds up the items whenever it's read.
+- **Modern dataclasses.** The classes use `@dataclass(slots=True, kw_only=True)`. Slots catch attribute typos, and keyword-only arguments make objects clearer to create. `ScheduledItem` is `frozen=True`, so an entry can't be changed once it's in the plan.
 
 ---
 
