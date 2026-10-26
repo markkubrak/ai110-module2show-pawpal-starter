@@ -1,7 +1,8 @@
 """PawPal+ logic layer: backend classes for pets, tasks, and daily scheduling."""
 
+import bisect
 import datetime as dt
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import time, timedelta
 from enum import IntEnum, StrEnum
 from uuid import uuid4
@@ -34,6 +35,17 @@ class Frequency(StrEnum):
     WEEKLY = "weekly"
 
 
+class Status(StrEnum):
+    """Task status filter: still due, or marked complete."""
+
+    PENDING = "pending"
+    DONE = "done"
+
+
+# Days between occurrences for each recurring frequency.
+_INTERVAL_DAYS = {Frequency.DAILY: 1, Frequency.WEEKLY: 7}
+
+
 @dataclass(slots=True, kw_only=True)
 class Task:
     """A single pet care activity (walk, feeding, meds, enrichment, grooming, ...)."""
@@ -44,6 +56,7 @@ class Task:
     priority: Priority = Priority.MEDIUM
     preferred_time: time | None = None
     frequency: Frequency = Frequency.DAILY
+    due_date: dt.date = field(default_factory=dt.date.today)
     completed: bool = False
     last_completed: dt.date | None = None
     id: str = field(default_factory=lambda: uuid4().hex, compare=False)
@@ -55,20 +68,41 @@ class Task:
         if self.duration_minutes <= 0:
             raise ValueError("Task duration must be a positive number of minutes.")
 
-    def mark_complete(self, on: dt.date | None = None) -> None:
-        """Mark this task as done (on the given day, default today)."""
+    def mark_complete(self, on: dt.date | None = None) -> "Task | None":
+        """Mark this task as done (on the given day, default today).
+
+        Returns the next occurrence for daily/weekly tasks, or None for one-off
+        tasks or a task that was already complete (so nothing is duplicated).
+        """
+        if self.completed:
+            return None
         self.completed = True
         self.last_completed = on or dt.date.today()
+        return self.next_occurrence()
+
+    def next_occurrence(self) -> "Task | None":
+        """Return a fresh, incomplete copy of this task due one interval after it was completed."""
+        if self.frequency is Frequency.ONCE:
+            return None
+        base = self.last_completed or self.due_date
+        return replace(
+            self,
+            due_date=base + timedelta(days=_INTERVAL_DAYS[self.frequency]),
+            completed=False,
+            last_completed=None,
+            id=uuid4().hex,
+        )
 
     def is_due(self, day: dt.date) -> bool:
         """Return True if this task still needs doing on the given day."""
-        if self.frequency is Frequency.ONCE:
-            return not self.completed
-        if self.last_completed is None:
-            return True
-        if self.frequency is Frequency.DAILY:
-            return self.last_completed < day
-        return (day - self.last_completed).days >= 7
+        return not self.completed and self.due_date <= day
+
+    def time_window(self) -> tuple[int, int] | None:
+        """Return (start, end) in minutes after midnight if this task has a preferred time."""
+        if self.preferred_time is None:
+            return None
+        start = _to_minutes(self.preferred_time)
+        return start, start + self.duration_minutes
 
 
 @dataclass(slots=True, kw_only=True)
@@ -156,6 +190,7 @@ class DailyPlan:
     available_minutes: int = 0
     items: list[ScheduledItem] = field(default_factory=list)
     skipped: list[tuple[Pet, Task]] = field(default_factory=list)
+    conflicts: list[str] = field(default_factory=list)
 
     @property
     def total_minutes(self) -> int:
@@ -172,7 +207,8 @@ class DailyPlan:
             return "No tasks are due today."
         lines = [
             f"Tasks were chosen by priority (high first), then preferred time, then shortest "
-            f"duration, until the {self.available_minutes} available minutes were used.",
+            f"duration, until the {self.available_minutes} available minutes were used. "
+            f"Timed tasks were placed at their preferred times; flexible tasks fill the gaps.",
             f"Scheduled {len(self.items)} task(s) using {self.total_minutes} minutes.",
         ]
         lines += [f"- {i.task.description} ({i.pet.name}): {i.reason}" for i in self.items]
@@ -182,6 +218,9 @@ class DailyPlan:
                 f"- {t.description} ({p.name}, {t.duration_minutes} min, {t.priority.name.lower()} priority)"
                 for p, t in self.skipped
             ]
+        if self.conflicts:
+            lines.append("Conflicts:")
+            lines += [f"- {c}" for c in self.conflicts]
         return "\n".join(lines)
 
     def display(self) -> str:
@@ -223,41 +262,155 @@ class Scheduler:
 
     def get_todays_tasks(self, day: dt.date | None = None) -> list[tuple[Pet, Task]]:
         """Return the (pet, task) pairs that are due on the given day (default today)."""
-        day = day or dt.date.today()
-        return [(p, t) for p, t in self.owner.get_all_tasks() if t.is_due(day)]
+        return self.filter_tasks(status=Status.PENDING, day=day)
 
-    def complete_task(self, task_id: str, on: dt.date | None = None) -> Task:
-        """Mark the task with this id complete, whichever pet it belongs to."""
-        for _, task in self.owner.get_all_tasks():
+    def filter_tasks(
+        self,
+        pet_name: str | None = None,
+        status: Status | str | None = None,
+        day: dt.date | None = None,
+    ) -> list[tuple[Pet, Task]]:
+        """Return (pet, task) pairs matching a pet name and/or status.
+
+        status is Status.PENDING (due on the day and not complete) or Status.DONE
+        (marked complete); plain "pending"/"done" strings work too. None means any
+        status. Filters combine with AND.
+        """
+        try:
+            status = Status(status) if status is not None else None
+        except ValueError:
+            raise ValueError(f"Unknown status {status!r}; use 'pending' or 'done'.") from None
+        day = day or dt.date.today()
+        key = pet_name.strip().casefold() if pet_name else None
+
+        def matches(pet: Pet, task: Task) -> bool:
+            """True if this pair passes both the pet-name and status filters."""
+            if key is not None and pet.name.casefold() != key:
+                return False
+            if status is Status.PENDING:
+                return task.is_due(day)
+            if status is Status.DONE:
+                return task.completed
+            return True
+
+        return [(pet, task) for pet, task in self.owner.get_all_tasks() if matches(pet, task)]
+
+    @staticmethod
+    def sort_by_time(pairs: list[tuple[Pet, Task]]) -> list[tuple[Pet, Task]]:
+        """Return pairs ordered by preferred time; untimed tasks go last, higher priority first on ties."""
+
+        def by_time(pair: tuple[Pet, Task]) -> tuple:
+            """Sort key: preferred time (untimed = end of day), then higher priority first."""
+            _, task = pair
+            return (task.preferred_time or time.max, -task.priority)
+
+        return sorted(pairs, key=by_time)
+
+    def detect_conflicts(
+        self, day: dt.date | None = None, tasks: list[tuple[Pet, Task]] | None = None
+    ) -> list[str]:
+        """Return warnings for due tasks whose preferred time windows overlap.
+
+        Lightweight: never raises, just returns messages (empty list = no conflicts).
+        Pass tasks to reuse an already-computed due list instead of fetching it again.
+        Sweep line: sort windows by start, then compare each one only with the
+        tasks that start before it ends, so non-overlapping tasks are never compared.
+        """
+        if tasks is None:
+            tasks = self.get_todays_tasks(day)
+        # Sort on the window only: comparing whole tuples would compare Pet objects on ties.
+        timed = sorted(
+            ((task.time_window(), pet, task) for pet, task in tasks if task.preferred_time),
+            key=lambda entry: entry[0],
+        )
+        warnings = []
+        for i, ((start, end), pet, task) in enumerate(timed):
+            for j in range(i + 1, len(timed)):
+                (other_start, other_end), other_pet, other = timed[j]
+                if other_start >= end:
+                    break
+                who = f"both for {pet.name}" if pet is other_pet else f"{pet.name} and {other_pet.name}"
+                warnings.append(
+                    f"{task.description} ({_fmt(start)}-{_fmt(end)}) overlaps "
+                    f"{other.description} ({_fmt(other_start)}-{_fmt(other_end)}), {who}."
+                )
+        return warnings
+
+    def complete_task(self, task_id: str, on: dt.date | None = None) -> Task | None:
+        """Mark the task with this id complete, whichever pet it belongs to.
+
+        For daily/weekly tasks the next occurrence is added to the same pet and
+        returned; one-off tasks return None.
+        """
+        for pet, task in self.owner.get_all_tasks():
             if task.id == task_id:
-                task.mark_complete(on)
-                return task
+                next_task = task.mark_complete(on)
+                if next_task is not None:
+                    pet.add_task(next_task)
+                return next_task
         raise KeyError(f"No task with id {task_id}.")
 
     def generate_plan(self, day: dt.date | None = None) -> DailyPlan:
-        """Sort tasks once, then greedily fit them into the owner's available time."""
+        """Find due tasks, flag conflicts, fit tasks into the time budget, then lay them out."""
         day = day or dt.date.today()
         plan = DailyPlan(date=day, available_minutes=self.owner.available_minutes)
-        remaining = self.owner.available_minutes
+        due = self.get_todays_tasks(day)
+        plan.conflicts = self.detect_conflicts(day, tasks=due)
+        chosen, plan.skipped = self._select_within_budget(due)
+        for item in self._layout(chosen, plan):
+            plan.add_item(item)
+        return plan
 
-        # Pick which tasks fit, most important first.
-        chosen: list[tuple[Pet, Task]] = []
-        for pet, task in sorted(self.get_todays_tasks(day), key=self._sort_key):
+    def _select_within_budget(
+        self, due: list[tuple[Pet, Task]]
+    ) -> tuple[list[tuple[Pet, Task]], list[tuple[Pet, Task]]]:
+        """Greedy pick: most important tasks first, keep each one that still fits the budget."""
+        remaining = self.owner.available_minutes
+        chosen, skipped = [], []
+        for pet, task in sorted(due, key=self._sort_key):
             if task.duration_minutes <= remaining:
                 chosen.append((pet, task))
                 remaining -= task.duration_minutes
             else:
-                plan.skipped.append((pet, task))
+                skipped.append((pet, task))
+        return chosen, skipped
 
-        # Lay the chosen tasks out back to back: preferred times first, in clock order.
-        chosen.sort(key=lambda pair: (pair[1].preferred_time or time.max, -pair[1].priority))
-        start = self.owner.day_start
-        for pet, task in chosen:
-            if task.preferred_time and task.preferred_time > start:
-                start = task.preferred_time
-            plan.add_item(ScheduledItem(pet=pet, task=task, start_time=start, reason=self._reason(task)))
-            start = _add_minutes(start, task.duration_minutes)
-        return plan
+    def _layout(self, chosen: list[tuple[Pet, Task]], plan: DailyPlan) -> list[ScheduledItem]:
+        """Give each chosen task a start time, in clock order.
+
+        Timed tasks go at their preferred time (or as soon after as possible),
+        then flexible tasks fill the earliest gap they fit in. Pushed timed
+        tasks are noted in plan.conflicts.
+        """
+        timed = [(pet, task) for pet, task in chosen if task.preferred_time]
+        flexible = [(pet, task) for pet, task in chosen if not task.preferred_time]
+        day_start = _to_minutes(self.owner.day_start)
+        busy: list[tuple[int, int]] = []
+        placed: list[tuple[int, Pet, Task, str]] = []
+        cursor = day_start
+        for pet, task in self.sort_by_time(timed):
+            wanted = _to_minutes(task.preferred_time)
+            start = max(wanted, cursor)
+            reason = self._reason(task)
+            if start > wanted:
+                reason += f", moved to {_fmt(start)} because the earlier slot was taken"
+                plan.conflicts.append(
+                    f"{task.description} for {pet.name} wanted {_fmt(wanted)} but starts at {_fmt(start)}."
+                )
+            cursor = start + task.duration_minutes
+            busy.append((start, cursor))
+            placed.append((start, pet, task, reason))
+
+        for pet, task in sorted(flexible, key=self._sort_key):
+            start = _earliest_gap(busy, day_start, task.duration_minutes)
+            bisect.insort(busy, (start, start + task.duration_minutes))
+            placed.append((start, pet, task, self._reason(task)))
+
+        placed.sort(key=lambda entry: entry[0])
+        return [
+            ScheduledItem(pet=pet, task=task, start_time=_from_minutes(start), reason=reason)
+            for start, pet, task, reason in placed
+        ]
 
     def _sort_key(self, pair: tuple[Pet, Task]) -> tuple:
         """Sort key: highest priority first, then earliest preferred time, then shortest."""
@@ -275,3 +428,30 @@ class Scheduler:
 def _add_minutes(t: time, minutes: int) -> time:
     """Add minutes to a time of day (wraps past midnight)."""
     return (dt.datetime.combine(dt.date.min, t) + timedelta(minutes=minutes)).time()
+
+
+def _to_minutes(t: time) -> int:
+    """Minutes after midnight for a time of day."""
+    return t.hour * 60 + t.minute
+
+
+def _from_minutes(minutes: int) -> time:
+    """Time of day for a count of minutes after midnight (wraps past midnight)."""
+    hours, mins = divmod(minutes % (24 * 60), 60)
+    return time(hours, mins)
+
+
+def _fmt(minutes: int) -> str:
+    """Format minutes after midnight as HH:MM."""
+    hours, mins = divmod(minutes % (24 * 60), 60)
+    return f"{hours:02d}:{mins:02d}"
+
+
+def _earliest_gap(busy: list[tuple[int, int]], not_before: int, duration: int) -> int:
+    """Return the earliest start >= not_before where duration fits between sorted busy intervals."""
+    candidate = not_before
+    for start, end in busy:
+        if candidate + duration <= start:
+            return candidate
+        candidate = max(candidate, end)
+    return candidate

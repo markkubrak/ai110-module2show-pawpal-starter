@@ -33,10 +33,27 @@ Yes. When I turned the UML into Python class stubs and reviewed them, I found a 
 - What constraints does your scheduler consider (for example: time, priority, preferences)?
 - How did you decide which constraints mattered most?
 
+The scheduler considers these constraints:
+
+- **Time budget.** The owner sets how many minutes they have today. The total of all scheduled tasks can't go over that number, and anything that doesn't fit is listed as skipped.
+- **Priority.** Each task is low, medium, or high. High-priority tasks are picked first.
+- **Preferred time.** A task can have a time of day it should happen, like meds at 08:15. Timed tasks are placed at that time, or as soon after it as possible.
+- **Start of day.** Nothing is scheduled before the owner's start time.
+- **Recurrence.** Only tasks that are due today are considered. Daily and weekly tasks come back on their next due date after they're completed.
+- **No double-booking.** The owner can only do one thing at a time, so tasks never overlap in the plan. When two tasks want the same time, the scheduler warns about it and moves the later one.
+
+Priority matters most because it's about the pet's health. A missed meds dose or meal matters more than a skipped play session, so when time runs short the less important tasks should be the ones dropped. The time budget comes next because it's a hard limit: the owner simply doesn't have more minutes. Preferred times come after that. They decide *when* a task happens, but they never decide *whether* it happens. Shorter duration only breaks ties, so more small tasks fit in.
+
 **b. Tradeoffs**
 
 - Describe one tradeoff your scheduler makes.
 - Why is that tradeoff reasonable for this scenario?
+
+The scheduler picks tasks **greedily**. It goes through tasks from highest to lowest priority and keeps each one that still fits in the remaining minutes. This doesn't always make the best use of the time. With 30 minutes left, a 25-minute high-priority task takes the slot, even if three 10-minute medium tasks would have filled the time completely. A knapsack-style algorithm would pack more minutes in, but it might drop that high-priority task in favour of the smaller ones.
+
+This is reasonable for pet care because it's predictable and easy to explain. An owner can trust that the most important care, like meds and feeding, always gets in first. The "Why this plan" explanation is also simple: "high priority first, until time ran out." Using every last minute matters less than never skipping something important. With only a handful of tasks a day, the greedy approach is also fast and easy to test.
+
+A second, smaller tradeoff: conflicts are **warnings, not errors**. If two tasks want the same time, the scheduler doesn't refuse to build the plan. It flags the clash and pushes the later task back. A real owner would rather get a workable plan with a note than an error message.
 
 ---
 
