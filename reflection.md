@@ -4,8 +4,14 @@
 
 **a. Initial design**
 
-- Briefly describe your initial UML design.
-- What classes did you include, and what responsibilities did you assign to each?
+My first UML design is built around three things a user has to be able to do: add a pet, schedule a walk, and see today's tasks. An `Owner` has many `Pet`s, and each `Pet` has many `Task`s. A `Scheduler` reads from the owner and produces a `DailyPlan`. The plan is made of `ScheduledItem`s, and each item has a start time and a reason it was chosen.
+
+- **Owner**: holds the owner's name, the minutes they have free each day, and their preferences (for example, "morning walks"). It keeps the list of pets (`add_pet`, `remove_pet`, `get_pet`) and can collect every pet's tasks (`get_all_tasks`). This covers **adding a pet**.
+- **Pet**: holds the pet's details (name, species, breed, age) and its own task list (`add_task`, `remove_task`, `get_tasks`).
+- **Task**: one care activity, such as a walk, feeding, meds, enrichment or grooming. It stores a title, category, duration, priority, preferred time and whether it's done. `mark_complete` updates the status, and `priority_value` turns "high/medium/low" into a number the scheduler can sort by.
+- **Scheduler**: holds the scheduling logic. `schedule_walk` creates a walk task and adds it to a pet, which covers **scheduling a walk**. `get_todays_tasks` returns the tasks that still need doing, which covers **seeing today's tasks**. `generate_plan` sorts tasks by priority and fits them into the owner's available time.
+- **DailyPlan**: the result of scheduling. It stores the scheduled items, the tasks that were skipped because there wasn't enough time, and the total minutes used. `explain()` describes why the plan was built this way, and `display()` formats it for the UI.
+- **ScheduledItem**: links a task to a pet, a start time and a short reason (for example, "high priority, fits before 9am preference").
 
 **b. Design changes**
 

@@ -1,0 +1,68 @@
+classDiagram
+    %% PawPal+ initial design draft.
+
+    class Owner {
+        +str name
+        +int available_minutes
+        +list~str~ preferences
+        +list~Pet~ pets
+        +add_pet(pet: Pet) None
+        +remove_pet(name: str) None
+        +get_pet(name: str) Pet
+        +get_all_tasks() list~Task~
+    }
+
+    class Pet {
+        +str name
+        +str species
+        +str breed
+        +int age
+        +list~Task~ tasks
+        +add_task(task: Task) None
+        +remove_task(title: str) None
+        +get_tasks() list~Task~
+    }
+
+    class Task {
+        +str title
+        +str category
+        +int duration_minutes
+        +str priority
+        +str preferred_time
+        +bool completed
+        +mark_complete() None
+        +priority_value() int
+    }
+
+    class Scheduler {
+        +Owner owner
+        +schedule_walk(pet: Pet, duration_minutes: int, preferred_time: str, priority: str) Task
+        +get_todays_tasks() list~Task~
+        +generate_plan() DailyPlan
+        -sort_by_priority(tasks: list~Task~) list~Task~
+    }
+
+    class DailyPlan {
+        +date date
+        +list~ScheduledItem~ items
+        +list~Task~ skipped
+        +int total_minutes
+        +add_item(item: ScheduledItem) None
+        +explain() str
+        +display() str
+    }
+
+    class ScheduledItem {
+        +Task task
+        +Pet pet
+        +str start_time
+        +str reason
+    }
+
+    Owner "1" o-- "*" Pet : owns
+    Pet "1" *-- "*" Task : has
+    Scheduler --> Owner : plans for
+    Scheduler ..> DailyPlan : creates
+    DailyPlan "1" *-- "*" ScheduledItem : contains
+    ScheduledItem --> Task : wraps
+    ScheduledItem --> Pet : for
